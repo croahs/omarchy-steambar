@@ -45,7 +45,8 @@ Panel {
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  // Fades toward whatever is behind, so it reads as secondary on light and dark themes.
+  readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.6)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string script: Qt.resolvedUrl("steam.py").toString().replace(/^file:\/\//, "")
   readonly property int recentCount: Math.max(1, Number(setting("recentCount", 10)))
@@ -70,11 +71,48 @@ Panel {
     return fallback || (folders.length ? folders[0] : null)
   }
 
-  // Steam's own presence colours; the theme accent is too grey to read as "online".
-  readonly property color inGameColor: "#90ba3c"
-  readonly property color onlineColor: "#57cbde"
-  // The theme's urgent colour is grey here too, so uninstall gets a real red.
-  readonly property color dangerColor: "#e0524d"
+  // The theme's named colours from colors.toml. The shell gives plugins only
+  // its foundational palette, so the file is re-read when that palette
+  // changes on a theme switch, rather than watched.
+  property var themeColors: ({})
+  readonly property color inGameColor: themeColor("green", Color.accent)
+  readonly property color onlineColor: themeColor("blue", Color.accent)
+  readonly property color dangerColor: themeColor("red", urgent)
+  readonly property color cautionColor: themeColor("yellow", dim)
+
+  function themeColor(name, fallback) {
+    var value = themeColors[name]
+    return value ? value : fallback
+  }
+
+  function parseThemeColors(source) {
+    var out = {}
+    var pattern = /^\s*([a-z_]+)\s*=\s*"(#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)"/gm
+    var match
+    while ((match = pattern.exec(source)) !== null) out[match[1]] = match[2]
+    return out
+  }
+
+  // Text on a filled theme colour: the theme's background or text colour,
+  // whichever stands out more against the fill.
+  function textOn(fill) {
+    var luma = function(c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b }
+    var l = luma(fill)
+    return Math.abs(l - luma(Color.background)) > Math.abs(l - luma(Color.foreground)) ? Color.background : Color.foreground
+  }
+
+  FileView {
+    id: themeColorsFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    onLoaded: root.themeColors = root.parseThemeColors(text())
+  }
+
+  Connections {
+    target: Color
+    function onForegroundChanged() { themeColorsFile.reload() }
+    function onBackgroundChanged() { themeColorsFile.reload() }
+    function onAccentChanged() { themeColorsFile.reload() }
+  }
 
   readonly property var recentGames: {
     var out = []
@@ -394,7 +432,7 @@ Panel {
   }
 
   function reviewColor(percent) {
-    return percent >= 70 ? "#66c0f4" : percent >= 40 ? "#b9a074" : "#c35c2c"
+    return percent >= 70 ? onlineColor : percent >= 40 ? cautionColor : dangerColor
   }
 
   function reviewLine(r) {
@@ -1170,7 +1208,7 @@ Panel {
                 id: badgeText
                 anchors.centerIn: parent
                 text: railTab.badge
-                color: root.unreadTotal ? "black" : root.foreground
+                color: root.unreadTotal ? root.textOn(root.inGameColor) : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption * 0.9
                 font.bold: true
@@ -1922,7 +1960,7 @@ Panel {
                     if (p.releaseDate) out.push({ k: "RELEASE", v: p.releaseDate + (p.earlyAccess ? " · Early Access" : "") })
                     if (p.developers.length) out.push({ k: "DEVELOPER", v: p.developers.join(", ") })
                     if (p.publishers.length) out.push({ k: "PUBLISHER", v: p.publishers.join(", ") })
-                    if (p.deck) out.push({ k: "STEAM DECK", v: p.deck, c: p.deck === "Verified" ? root.inGameColor : p.deck === "Playable" ? "#e0b84c" : root.dim })
+                    if (p.deck) out.push({ k: "STEAM DECK", v: p.deck, c: p.deck === "Verified" ? root.inGameColor : p.deck === "Playable" ? root.cautionColor : root.dim })
                     var os = []
                     if (p.platforms.windows) os.push("Windows")
                     if (p.platforms.mac) os.push("macOS")
@@ -2020,12 +2058,12 @@ Panel {
                     visible: !root.storeOwned && !!storePane.page && storePane.page.discount > 0
                     implicitWidth: discountText.implicitWidth + Style.space(10)
                     implicitHeight: discountText.implicitHeight + Style.space(6)
-                    color: "#4c6b22"
+                    color: root.inGameColor
                     Text {
                       id: discountText
                       anchors.centerIn: parent
                       text: storePane.page ? "−" + storePane.page.discount + "%" : ""
-                      color: "#beee11"
+                      color: root.textOn(root.inGameColor)
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
                       font.bold: true
@@ -2057,14 +2095,14 @@ Panel {
                     implicitWidth: buyText.implicitWidth + Style.space(18)
                     implicitHeight: buyText.implicitHeight + Style.space(10)
                     radius: Style.space(3)
-                    color: buyMouse.containsMouse ? "#79b82b" : "#5c9a1c"
+                    color: buyMouse.containsMouse ? Qt.tint(root.inGameColor, Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15)) : root.inGameColor
                     Text {
                       id: buyText
                       anchors.centerIn: parent
                       text: root.storeOwned ? (root.storeOwned.installed ? "󰐊 Play" : "󰇚 Install")
                         : storePane.page && storePane.page.comingSoon ? "Wishlist in Steam"
                         : storePane.page && storePane.page.free ? "Get in Steam" : "Buy in Steam"
-                      color: "white"
+                      color: root.textOn(root.inGameColor)
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
                       font.bold: true
@@ -2261,7 +2299,7 @@ Panel {
                       textFormat: Text.PlainText
                       text: (modelData.up ? "󰔓 Recommended" : "󰔑 Not Recommended") + "  ·  " + modelData.hours + " hrs on record"
                         + (modelData.helpful ? "  ·  " + modelData.helpful + " found helpful" : "")
-                      color: modelData.up ? "#66c0f4" : "#c35c2c"
+                      color: modelData.up ? root.onlineColor : root.dangerColor
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
                       font.bold: true
@@ -2649,7 +2687,7 @@ Panel {
             id: unreadLabel
             anchors.centerIn: parent
             text: f.friend ? String(f.friend.unread) : ""
-            color: "black"
+            color: root.textOn(root.onlineColor)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
@@ -2824,7 +2862,7 @@ Panel {
 
         Text {
           text: "󰅖"
-          color: badge.armed || badgeMouse.containsMouse ? "white" : root.foreground
+          color: badge.armed || badgeMouse.containsMouse ? root.textOn(root.dangerColor) : root.foreground
           font.family: root.fontFamily
           font.pixelSize: badge.small ? Style.font.caption : Style.font.bodySmall
           anchors.verticalCenter: parent.verticalCenter
@@ -2834,7 +2872,7 @@ Panel {
           id: label
           visible: badge.armed
           text: "Uninstall"
-          color: "white"
+          color: root.textOn(root.dangerColor)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
